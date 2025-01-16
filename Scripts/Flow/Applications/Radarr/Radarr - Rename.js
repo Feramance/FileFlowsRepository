@@ -3,22 +3,23 @@ import { Radarr } from 'Shared/Radarr';
 /**
  * @description This script will send a rename command to Radarr
  * @author Shaun Agius, Anthony Clerici
- * @revision 9
- * @uid efaf3887-4fcb-42ce-97b2-cc07f1b619d2
- * @param {string} URI Radarr root URI and port (e.g. http://radarr:1234)
+ * @revision 12
+ * @param {string} URI Radarr root URI and port (e.g. http://radarr:7878)
  * @param {string} ApiKey API Key
- * @output Item renamed
- * @output Item not renamed
+ * @output Item renamed successfully
+ * @output Rename not required for item
  * @output Item not found
  */
 function Script(URI, ApiKey) {
+    // Remove trailing / from URI
+    URI = URI.replace(/\/$/, '');
     let radarr = new Radarr(URI, ApiKey);
     let folderPath = Variables.folder.FullName;
     let currentFileName = Variables.file.Name;
-    let newFileName = null;
+    let newFilePath = null;
 
     // Find movie name from radarr
-    let movie = findMovie(folderPath, radarr);
+    let [movie, basePath] = findMovie(folderPath, radarr);
 
     if (!movie) {
         Logger.WLog('Movie not found for path: ' + folderPath);
@@ -38,17 +39,18 @@ function Script(URI, ApiKey) {
     });
 
     try {
-        // Ensure movie is rescanned before renaming
+        // Ensure movie is refreshed before renaming
         let refreshBody = {
-            movieId: movie.id
+            movieIds: [movie.id],
+            isNewMovie: false
         }
-        let refreshData = radarr.sendCommand('RescanMovie', refreshBody)
-        Logger.ILog('Movie rescanned');
+        let refreshData = radarr.sendCommand('RefreshMovie', refreshBody)
+        Logger.ILog('Movie refreshed');
 
-        // Wait for the completion of the refresh scan
+        // Wait for the completion of the refresh
         let refreshCompleted = radarr.waitForCompletion(refreshData.id);
         if (!refreshCompleted) {
-            Logger.ILog('rescan not completed');
+            Logger.ILog('refresh not completed');
             return -1;
         }
 
@@ -74,8 +76,13 @@ function Script(URI, ApiKey) {
             return 2;
         }
         
-        newFileName = System.IO.Path.GetFileName(renamedMovie.newPath);
-        Logger.ILog(`Found it, renaming file to ${newFileName}`);
+        let newFileName = renamedMovie.newPath;
+        // Get differences in the path
+        Logger.ILog(`Base path: ${basePath}`);
+        // Construct new filepath
+        Logger.ILog(`New path: ${newFileName}`);
+        newFilePath = System.IO.Path.Combine(basePath, newFileName);
+        Logger.ILog(`Found it, renaming file ${newEpisodeFileId} to ${newFilePath}`);
 
         if (newFileName === null) {
             Logger.WLog('No matching movie found to rename.');
@@ -98,7 +105,6 @@ function Script(URI, ApiKey) {
         Logger.ILog(`Movie ${movie.id} successfully renamed. Setting as working file.`)
 
         // Radarr has successfully renamed the file, set new filename as working directory
-        let newFilePath = System.IO.Path.Combine(Variables.folder.FullName, newFileName);
         Flow.SetWorkingFile(newFilePath);
         return 1;
 
@@ -129,7 +135,7 @@ function findMovie(filePath, radarr) {
         if (movieFolders[currentFolder]) {
             movie = movieFolders[currentFolder];
             Logger.ILog('Movie found: ' + movie.id);
-            return movie;
+            return [movie, currentPath];
         }
 
         // Log the path where the movie was not found and move up one directory
@@ -137,9 +143,9 @@ function findMovie(filePath, radarr) {
         currentPath = System.IO.Path.GetDirectoryName(currentPath);
         if (!currentPath) {
             Logger.WLog('Unable to find movie file at path ' + filePath);
-            return null;
+            return [null, null];
         }
     }
 
-    return null;
+    return [null, null];
 }
